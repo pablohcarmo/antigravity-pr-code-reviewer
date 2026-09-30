@@ -1,120 +1,128 @@
-# 🤖 Antigravity PR Code Reviewer (GitHub Action)
+# Antigravity PR Code Reviewer
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Antigravity%20PR%20Code%20Reviewer-blue?logo=github&style=flat-square)](https://github.com/marketplace/actions/antigravity-pr-code-reviewer)
 [![Release](https://img.shields.io/github/v/release/pablohcarmo/antigravity-pr-code-reviewer?style=flat-square&color=blue)](https://github.com/pablohcarmo/antigravity-pr-code-reviewer/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
-> Agente autônomo de Code Review para Pull Requests potencializado por **Google Antigravity** e **Gemini**, empacotado como uma **GitHub Action reutilizável**.
-
-Com esta Action, você **não precisa copiar scripts, instalar pacotes ou recriar o agente** em cada um dos seus repositórios. Basta adicionar um workflow mínimo de poucas linhas e qualquer Pull Request passará a ser revisado automaticamente por um agente com postura sênior, analisando segurança, performance, arquitetura e manutenibilidade.
+Agente autônomo para revisão de código em Pull Requests do GitHub, integrado com Google Antigravity e modelos Google Gemini, distribuído como uma GitHub Action composta reutilizável. O agente atua sob a perspectiva de engenharia de software sênior, avaliando vulnerabilidades de segurança (OWASP), padrões arquiteturais (SOLID, Clean Code), impacto de performance e manutenibilidade.
 
 ---
 
-## 📑 Sumário
+## Sumário
 
-- [Por que usar como GitHub Action?](#-por-que-usar-como-github-action)
-- [Como Funciona](#-como-funciona)
-- [Passo a Passo de Configuração](#-passo-a-passo-de-configuração)
-  - [1. Obter a Chave de API no Google AI Studio](#1-obter-a-chave-de-api-no-google-ai-studio)
-  - [2. Configurar a Chave no GitHub (Repositório ou Organização)](#2-configurar-a-chave-no-github-repositório-ou-organização)
-  - [3. Adicionar o Workflow no Repositório de Destino](#3-adicionar-o-workflow-no-repositório-de-destino)
-- [Personalizando as Regras (Opcional)](#-personalizando-as-regras-opcional)
-- [Parâmetros da Action (Inputs)](#-parâmetros-da-action-inputs)
-- [Estrutura do Projeto](#-estrutura-do-projeto)
-- [Resolução de Problemas (Troubleshooting)](#-resolução-de-problemas-troubleshooting)
-- [Licença](#-licença)
-
----
-
-## ✨ Por que usar como GitHub Action?
-
-| Abordagem Tradicional (Scripts no Repo) | Com esta GitHub Action |
-| :--- | :--- |
-| ❌ Copiar scripts Python e requirements para todo projeto. | ✅ **Zero arquivos de script** no projeto de destino. |
-| ❌ Atualizar manualmente scripts em cada repositório. | ✅ Atualizações centralizadas diretamente na Action. |
-| ❌ Duplicação de código e manutenção custosa. | ✅ Apenas **1 arquivo de workflow `.yml`** no repo. |
-| ❌ Configurar secrets individualmente. | ✅ Pode usar **Organization Secrets** (uma única vez para todos os repos). |
+- [Visão Geral](#visão-geral)
+- [Arquitetura de Execução](#arquitetura-de-execução)
+- [Pré-requisitos](#pré-requisitos)
+- [Guia de Integração](#guia-de-integração)
+  - [1. Obtenção da Chave de API no Google AI Studio](#1-obtenção-da-chave-de-api-no-google-ai-studio)
+  - [2. Configuração de Secrets no GitHub](#2-configuração-de-secrets-no-github)
+  - [3. Criação do Workflow no Repositório](#3-criação-do-workflow-no-repositório)
+- [Parâmetros da Action (Inputs)](#parâmetros-da-action-inputs)
+  - [Seleção e Disponibilidade de Modelos](#seleção-e-disponibilidade-de-modelos)
+- [Personalização de Diretrizes (AGENTS.md)](#personalização-de-diretrizes-agentsmd)
+- [Exemplo de Análise em Pull Request](#exemplo-de-análise-em-pull-request)
+- [Estrutura do Repositório](#estrutura-do-repositório)
+- [Diagnóstico e Solução de Problemas](#diagnóstico-e-solução-de-problemas)
+- [Licença](#licença)
 
 ---
 
-## 🏛 Como Funciona
+## Visão Geral
+
+O **Antigravity PR Code Reviewer** padroniza o processo de code review contínuo sem demandar infraestrutura dedicada, servidores intermediários ou permissões administrativas invasivas de GitHub Apps de terceiros.
+
+Principais características técnicas:
+
+- **Isolamento e Segurança:** A execução ocorre integralmente no runner do GitHub Actions do próprio repositório cliente. A comunicação ocorre diretamente entre o runner e a API do Gemini via HTTPS.
+- **Resiliência Git:** Algoritmo defensivo de extração de `git diff` compatível com pull requests originados de branches internos, forks e diferentes estratégias de checkout.
+- **Tolerância a Falhas:** Mecanismo de retry com backoff exponencial para lidar com limites transitórios de taxa da API de IA.
+- **Truncamento Inteligente:** Proteção contra estouro de contexto em diffs extensos, priorizando estatísticas gerais de modificação (`git diff --stat`) e cabeçalhos de arquivos.
+- **Governança Declarativa:** Aplicação automática das diretrizes do arquivo `AGENTS.md` presente no repositório de destino, assegurando consistência com as convenções de cada projeto.
+
+---
+
+## Arquitetura de Execução
 
 ```mermaid
 flowchart LR
     A[Pull Request Criado ou Atualizado] --> B[GitHub Actions Runner]
-    B --> C[Usa pablohcarmo/antigravity-pr-code-reviewer]
-    C --> D[Extrai git diff contra base]
-    C --> E[Carrega Diretrizes AGENTS.md]
-    D --> F[Agente Antigravity + Gemini]
+    B --> C[pablohcarmo/antigravity-pr-code-reviewer]
+    C --> D[Extracao Resiliente do Git Diff]
+    C --> E[Carregamento de Diretrizes AGENTS.md]
+    D --> F[Agente Google Antigravity + Gemini]
     E --> F
-    F --> G[Publica Comentário no PR]
+    F --> G[Publicacao de Review via GitHub CLI]
 ```
 
-1. Quando um Pull Request é aberto ou atualizado em qualquer repositório, o GitHub Actions dispara.
-2. A Action invoca o agente **Antigravity** com as diretrizes de engenharia.
-3. Se o seu repositório possuir um arquivo `AGENTS.md`, a Action usará as suas regras personalizadas. Caso contrário, utilizará as diretrizes de alto padrão de segurança e arquitetura pré-configuradas na própria Action.
-4. O comentário formatado em Markdown com análise crítica e sugestões de código é publicado diretamente no PR via GitHub CLI (`gh`).
+1. O evento do Pull Request aciona o workflow no runner do GitHub Actions.
+2. A Action obtém a árvore de alterações entre o branch de origem e a base de destino.
+3. As diretrizes do projeto são lidas do arquivo `AGENTS.md` do repositório cliente; se inexistente, adota-se o conjunto sênior pré-configurado na Action.
+4. O agente analisa o código contra critérios de segurança, performance, arquitetura e manutenibilidade.
+5. O relatório executivo formatado em Markdown é publicado diretamente na discussão do PR via GitHub CLI (`gh`).
 
 ---
 
-## 🚀 Passo a Passo de Configuração
+## Pré-requisitos
 
-### 1. Obter a Chave de API no Google AI Studio
+- Chave de API ativa do Google Gemini gerada no Google AI Studio.
+- Permissão de escrita habilitada para workflows em **Settings > Actions > General > Workflow permissions** (`Read and write permissions`).
 
-O agente utiliza os modelos do Google Gemini. Para gerar a chave gratuita:
+---
 
-1. Acesse o **[Google AI Studio](https://aistudio.google.com/)** e autentique-se com sua conta Google.
-2. No menu lateral ou superior, acesse a seção de **Chaves de API** (*Get API key*).
-3. Clique em **Criar chave de API** (*Create API key*).
+## Guia de Integração
+
+### 1. Obtenção da Chave de API no Google AI Studio
+
+Para utilizar o modelo Gemini:
+
+1. Acesse o [Google AI Studio](https://aistudio.google.com/) e autentique-se com sua conta Google.
+2. No menu de navegação, selecione **Get API key**.
+3. Clique em **Create API key**.
 
 ![Tela de Chaves de API no Google AI Studio](images/api-keys.png)
 
-*Figura 1: Acessando a tela de Chaves de API no Google AI Studio.*
+*Figura 1: Acesso ao painel de credenciais de API no Google AI Studio.*
 
-4. Na janela **Criar uma nova chave**, informe um nome de identificação (ex: `Gemini API Key`), selecione o projeto do Google Cloud e clique em **Criar chave**.
+4. Selecione o projeto do Google Cloud correspondente e confirme a criação.
 
 ![Modal de criação de chave](images/copy-api-key.png)
 
-*Figura 2: Definindo o nome da chave e o projeto associado.*
+*Figura 2: Definição do projeto associado à chave de API.*
 
-5. Na tela seguinte de **Detalhes da chave de API**, clique em **Copiar chave** e salve-a.
+5. Copie a chave gerada e armazene-a de forma segura.
 
-![Copiando a chave de API gerada](images/details-api-key.png)
+![Cópia da chave de API gerada](images/details-api-key.png)
 
-*Figura 3: Janela com a chave de API pronta para ser copiada.*
+*Figura 3: Exibição da chave de API pronta para armazenamento.*
 
 ---
 
-### 2. Configurar a Chave no GitHub (Repositório ou Organização)
+### 2. Configuração de Secrets no GitHub
 
-Você tem duas formas de disponibilizar a chave para os workflows:
+A chave de API deve ser configurada como GitHub Secret:
 
-#### Opção A: Em uma Organização (Recomendado para múltiplos repositórios)
-Se os seus repositórios pertencem a uma Organização no GitHub, você só precisa cadastrar a chave **uma única vez**:
-1. Vá na sua **Organização** > **Settings** > **Secrets and variables** > **Actions**.
+#### Configuração em Organização (Recomendado para múltiplos repositórios)
+1. Navegue até **Organization Settings > Secrets and variables > Actions**.
 2. Clique em **New organization secret**.
-3. Nome: `GEMINI_API_KEY`.
-4. Valor: cole a chave do AI Studio.
-5. Em **Repository access**, selecione **All repositories**.
-> Pronto! Todos os repositórios da organização terão acesso automático sem precisar cadastrar secret por repositório.
+3. Defina o nome como `GEMINI_API_KEY` e insira o token obtido.
+4. Em **Repository access**, selecione **All repositories** ou restrinja aos repositórios desejados.
 
-#### Opção B: Em um Repositório Específico
-1. No repositório desejado, vá em **Settings** > **Secrets and variables** > **Actions**.
+#### Configuração em Repositório Individual
+1. No repositório desejado, navegue até **Settings > Secrets and variables > Actions**.
 2. Clique em **New repository secret**.
-3. Nome: `GEMINI_API_KEY`.
-4. Valor: cole a chave da API.
-5. Clique em **Add secret**.
+3. Defina o nome como `GEMINI_API_KEY` e insira o token.
 
 ![Configuração de Repository Secret no GitHub](images/github-secret-config.png)
-*Figura 4: Adicionando o secret GEMINI_API_KEY nas configurações do GitHub.*
+
+*Figura 4: Cadastro do secret GEMINI_API_KEY nas configurações de Actions.*
 
 ---
 
-### 3. Adicionar o Workflow no Repositório de Destino
+### 3. Criação do Workflow no Repositório
 
-No repositório onde você deseja que os reviews automáticos aconteçam, crie apenas o arquivo:
+Crie o arquivo de definição do pipeline no repositório cliente:
 
-📁 `.github/workflows/code-review.yml`
+`.github/workflows/code-review.yml`
 
 ```yaml
 name: Antigravity Code Review
@@ -137,7 +145,7 @@ jobs:
     if: github.actor != 'dependabot[bot]'
 
     steps:
-      - name: Checkout do repositório
+      - name: Checkout do repositorio
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -149,79 +157,113 @@ jobs:
 ```
 
 > [!IMPORTANT]
-> Certifique-se de que o repositório permite permissões de escrita para o workflow em **Settings > Actions > General > Workflow permissions** (**Read and write permissions**).
+> Certifique-se de que a opção **Read and write permissions** está selecionada em **Settings > Actions > General > Workflow permissions** para permitir que a Action comente no Pull Request.
 
 ![Permissões do Workflow no GitHub Actions](images/github-workflow-permissions.png)
-*Figura 5: Configurando permissões de leitura e escrita para workflows no repositório.*
+
+*Figura 5: Habilitação de permissões de leitura e escrita para o GITHUB_TOKEN no repositório.*
 
 ---
 
-## 🎨 Personalizando as Regras (Opcional)
+## Parâmetros da Action (Inputs)
 
-A Action já vem com diretrizes completas de segurança (OWASP), performance e Clean Code baseadas no arquivo [AGENTS.md](file:///AGENTS.md).
+| Parâmetro | Tipo | Obrigatório | Padrão | Descrição |
+| :--- | :--- | :---: | :---: | :--- |
+| `gemini_api_key` | String | Sim | — | Chave de API do Google Gemini obtida no Google AI Studio. |
+| `github_token` | String | Não | `${{ github.token }}` | Token do GitHub com permissão de escrita em PRs (`pull-requests: write`). |
+| `agents_file` | String | Não | `AGENTS.md` | Caminho do arquivo contendo as diretrizes customizadas no repositório cliente. |
+| `gemini_model` | String | Não | *(padrão do SDK)* | Identificador do modelo Gemini específico a ser utilizado (ex: `gemini-2.5-flash`, `gemini-1.5-pro`). |
 
-Se o seu repositório de destino precisar de regras específicas (ex: exigir convenções de pastas, stack tecnológica particular ou proibir certas libs), basta criar um arquivo `AGENTS.md` na raiz do seu projeto. A Action detectará e aplicará suas regras customizadas automaticamente!
+### Seleção e Disponibilidade de Modelos
 
-Caso queira usar um arquivo com outro nome ou caminho, use o input `agents_file`:
+Por padrão, a Action utiliza o modelo estável padrão configurado internamente no SDK `google-antigravity` (família Flash, como `gemini-2.5-flash`), garantindo processamento rápido e ampla cota gratuita sem exigir qualquer configuração adicional.
+
+Caso deseje direcionar para uma versão específica, defina o parâmetro `gemini_model`:
 
 ```yaml
       - name: Executar Code Review com Antigravity
         uses: pablohcarmo/antigravity-pr-code-reviewer@v1
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          agents_file: 'docs/CODE_REVIEW_RULES.md'
+          gemini_model: 'gemini-1.5-pro'
+```
+
+Diretrizes de seleção:
+
+- **Modelos Flash (ex: `gemini-2.5-flash`, `gemini-1.5-flash`):** Ideais para alta cadência de Pull Requests, menor tempo de espera no pipeline e consumo eficiente de tokens.
+- **Modelos Pro (ex: `gemini-1.5-pro`):** Recomendados para análises mais profundas que demandem maior capacidade analítica em bases de código complexas ou revisões críticas.
+- **Disponibilidade e Quotas:** A disponibilidade depende exclusivamente dos modelos ativos na sua conta e chave do [Google AI Studio](https://aistudio.google.com/). Caso seja informado um modelo inexistente ou sem permissão de acesso, a API retornará falha (`404 / 400`). Para a maioria dos casos, recomenda-se manter o valor padrão.
+
+---
+
+## Personalização de Diretrizes (AGENTS.md)
+
+A Action inclui internamente um conjunto abrangente de diretrizes de nível sênior em [AGENTS.md](AGENTS.md), cobrindo sanitização de inputs, injeção de dependências, OWASP Top 10, complexidade de código e práticas de concorrência.
+
+Para sobrepor ou estender essas regras com os padrões específicos da sua organização, basta criar um arquivo `AGENTS.md` na raiz do projeto consumidor:
+
+```markdown
+# Diretrizes de Engenharia do Projeto
+
+1. Arquitetura:
+- Seguir estritamente o padrão de Arquitetura Limpa (Clean Architecture).
+- Camadas de domínio não devem possuir acoplamento com frameworks externos.
+
+2. Segurança e Validação:
+- Todas as entradas de endpoints REST devem ser validadas via DTOs tipados.
+- É vedado expor stack traces ou IDs internos em payloads de resposta de erro.
+```
+
+Caso o arquivo resida em outro diretório, especifique o caminho via input `agents_file`:
+
+```yaml
+      - name: Executar Code Review com Antigravity
+        uses: pablohcarmo/antigravity-pr-code-reviewer@v1
+        with:
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          agents_file: 'docs/ENGINEERING_GUIDELINES.md'
 ```
 
 ---
 
-## ⚙️ Parâmetros da Action (Inputs)
+## Exemplo de Análise em Pull Request
 
-| Input | Obrigatório | Padrão | Descrição |
-| :--- | :---: | :---: | :--- |
-| `gemini_api_key` | **Sim** | — | Chave de API do Google Gemini gerada no Google AI Studio. |
-| `github_token` | Não | `${{ github.token }}` | Token do GitHub com permissão de escrita em PRs. |
-| `agents_file` | Não | `AGENTS.md` | Caminho do arquivo de regras customizado no repositório cliente. |
+Após a execução do workflow, o relatório é publicado diretamente na discussão do Pull Request, apresentando um resumo executivo estruturado e a matriz de risco e impacto:
+
+![Exemplo de Code Review no Pull Request](images/pr-review-example.png)
+
+*Figura 6: Relatório estruturado publicado pela Action na timeline do Pull Request.*
 
 ---
 
-## 📂 Estrutura do Projeto
+## Estrutura do Repositório
 
 ```text
 ├── .github/
 │   └── workflows/
-│       └── code-review.yml       # Teste local / CI da própria Action
+│       └── code-review.yml       # Validação e teste contínuo da Action
 ├── scripts/
-│   └── ai_code_review.py         # Script Python do Agente Antigravity
-├── images/                       # Capturas de tela e documentação
-├── action.yml                    # Definição oficial da GitHub Action Composta
+│   └── ai_code_review.py         # Orquestrador do agente e integração com Git
+├── images/                       # Recursos visuais da documentação
+├── action.yml                    # Definição e metadados da GitHub Action Composta
 ├── AGENTS.md                     # Diretrizes padrão de revisão sênior
-├── requirements.txt              # Dependências (google-antigravity)
-├── LICENSE                       # Licença MIT
-└── README.md                     # Documentação de uso
+├── requirements.txt              # Dependência do SDK (google-antigravity)
+├── LICENSE                       # Licença de uso
+└── README.md                     # Documentação técnica do projeto
 ```
 
 ---
 
-## 🧪 Exemplo de Review no PR
+## Diagnóstico e Solução de Problemas
 
-Quando qualquer Pull Request for aberto, o agente analisa as alterações e responde diretamente:
-
-<!-- ADICIONE SUA CAPTURA DE TELA ABAIXO -->
-![Exemplo de Code Review no Pull Request](images/pr-review-example.png)
-*Figura 6: Comentário detalhado gerado pela Action no Pull Request.*
-
----
-
-## 🛠 Resolução de Problemas (Troubleshooting)
-
-| Sintoma | Causa Mais Provável | Solução |
+| Sintoma | Causa Provável | Ação Corretiva |
 | :--- | :--- | :--- |
-| `GEMINI_API_KEY não configurada. Review ignorado.` | Secret não cadastrado no repositório ou na organização. | Cadastre o secret `GEMINI_API_KEY` nas configurações de Actions. |
-| `gh: Resource not accessible by integration` | O workflow não tem permissão para comentar no PR. | Marque **Read and write permissions** em **Settings > Actions > General > Workflow permissions** e inclua `pull-requests: write` no workflow. |
-| `Nenhuma alteração de código encontrada para revisar.` | O checkout não possui histórico dos branches. | Garanta que o passo de checkout contenha `fetch-depth: 0`. |
+| `GEMINI_API_KEY não configurada. Review ignorado.` | Secret ausente ou inacessível no escopo do workflow. | Cadastre o secret `GEMINI_API_KEY` nas configurações de Actions do repositório ou da organização. |
+| `gh: Resource not accessible by integration` | O token de execução não possui autorização para interagir com a API de Pull Requests. | Habilite **Read and write permissions** em **Settings > Actions > General > Workflow permissions** e inclua `pull-requests: write` na seção `permissions` do workflow. |
+| `Nenhuma alteração de código encontrada para revisar.` | O checkout foi realizado de forma rasa (shallow clone), impedindo o cálculo do diff contra a base. | Certifique-se de que a etapa `actions/checkout` inclua o parâmetro `fetch-depth: 0`. |
 
 ---
 
-## 📄 Licença
+## Licença
 
-Distribuído sob a licença open-source [MIT](file:///LICENSE).
+Distribuído sob os termos da [Licença MIT](LICENSE).

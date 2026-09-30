@@ -1,7 +1,9 @@
 import os
 import sys
+import json
 import asyncio
 import subprocess
+import urllib.request
 from pathlib import Path
 from google.antigravity import Agent, LocalAgentConfig
 
@@ -75,12 +77,74 @@ def load_system_instructions() -> str:
         return f"{base_instructions}\n\nDiretrizes Operacionais Padrão:\n{guidelines}"
     return base_instructions
 
-def prepare_diff_prompt(diff_stat: str, diff_text: str) -> str:
-    """Monta o prompt incluindo estatísticas e truncamento defensivo."""
+def get_pr_discussions() -> str:
+    """Busca o histórico recente de comentários e respostas de desenvolvedores no PR via API do GitHub."""
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
+    pr_number = os.getenv("PR_NUMBER")
+    repo = os.getenv("GITHUB_REPOSITORY")
+
+    if not token or not pr_number or not repo:
+        return ""
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Antigravity-PR-Reviewer"
+    }
+
+    discussions: list[str] = []
+
+    # 1. Comentários de threads de review no código (/pulls/{pr}/comments)
+    try:
+        url_review = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/comments"
+        req_review = urllib.request.Request(url_review, headers=headers)
+        with urllib.request.urlopen(req_review, timeout=10) as resp:
+            review_comments = json.loads(resp.read().decode("utf-8"))
+            for c in review_comments[-15:]:
+                author = c.get("user", {}).get("login", "autor")
+                path = c.get("path", "")
+                line = c.get("line") or c.get("original_line") or ""
+                body = c.get("body", "").strip()
+                loc = f" em `{path}:{line}`" if path else ""
+                discussions.append(f"- [@{author}{loc}]: {body}")
+    except Exception as e:
+        print(f"Aviso: não foi possível carregar comentários de review do PR ({e})", file=sys.stderr)
+
+    # 2. Comentários gerais na timeline do PR (/issues/{pr}/comments)
+    try:
+        url_issue = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+        req_issue = urllib.request.Request(url_issue, headers=headers)
+        with urllib.request.urlopen(req_issue, timeout=10) as resp:
+            issue_comments = json.loads(resp.read().decode("utf-8"))
+            for c in issue_comments[-10:]:
+                author = c.get("user", {}).get("login", "autor")
+                body = c.get("body", "").strip()
+                # Ignora reviews anteriores para não poluir o prompt com diffs replicados
+                if "Changes recommended" not in body and "Changes approved" not in body and "Resumo Executivo" not in body and len(body) < 2000:
+                    discussions.append(f"- [@{author} na discussão geral]: {body}")
+    except Exception as e:
+        print(f"Aviso: não foi possível carregar comentários da issue ({e})", file=sys.stderr)
+
+    if not discussions:
+        return ""
+
+    return (
+        "Histórico de Comentários e Respostas de Desenvolvedores no PR:\n"
+        + "\n".join(discussions)
+        + "\n\n"
+        + "DIRETRIZ DE AVALIAÇÃO:\n"
+        + "Considere atentamente as justificativas e comentários acima. Se o desenvolvedor esclareceu "
+        + "decisões motivadas por regras de negócio, prazos ou restrições do PMO/empresa, pondere essa informação "
+        + "e não repita apontamentos dogmáticos já esclarecidos, adaptando sua recomendação de forma pragmática."
+    )
+
+def prepare_diff_prompt(diff_stat: str, diff_text: str, pr_discussions: str = "") -> str:
+    """Monta o prompt incluindo estatísticas, truncamento defensivo e discussões do PR."""
     header = f"Resumo dos arquivos alterados:\n```text\n{diff_stat}\n```\n\n"
+    discussions_block = f"{pr_discussions}\n\n" if pr_discussions else ""
     
     if len(diff_text) <= DIFF_CHAR_LIMIT:
-        return f"Analise o seguinte git diff e faça uma revisão de código:\n\n{header}```diff\n{diff_text}\n```"
+        return f"Analise o seguinte git diff e faça uma revisão de código:\n\n{header}{discussions_block}```diff\n{diff_text}\n```"
 
     cutoff = diff_text.rfind("\n", 0, DIFF_CHAR_LIMIT)
     cutoff = cutoff if cutoff != -1 else DIFF_CHAR_LIMIT
@@ -89,7 +153,7 @@ def prepare_diff_prompt(diff_stat: str, diff_text: str) -> str:
     return (
         "Analise o seguinte git diff e faça uma revisão de código.\n"
         "AVISO: O diff excedeu o limite máximo e foi truncado abaixo.\n\n"
-        f"{header}```diff\n{truncated}\n```\n\n"
+        f"{header}{discussions_block}```diff\n{truncated}\n```\n\n"
         "[... diff truncado por limite de tamanho ...]"
     )
 
@@ -126,7 +190,8 @@ async def run_review():
         config_params["model"] = gemini_model
 
     config = LocalAgentConfig(**config_params)
-    prompt = prepare_diff_prompt(diff_stat, diff_output)
+    pr_discussions = get_pr_discussions()
+    prompt = prepare_diff_prompt(diff_stat, diff_output, pr_discussions)
 
     final_review = ""
     max_attempts = 3
