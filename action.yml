@@ -17,6 +17,10 @@ inputs:
     description: 'Caminho para arquivo customizado de diretrizes no repositório de destino'
     required: false
     default: 'AGENTS.md'
+  gemini_model:
+    description: 'Modelo específico do Gemini (ex: gemini-3.8-flash). Usa o padrão do SDK quando omitido.'
+    required: false
+    default: ''
 
 runs:
   using: 'composite'
@@ -47,6 +51,11 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_BASE_REF: ${{ github.base_ref }}
         AGENTS_FILE: ${{ inputs.agents_file }}
+        GEMINI_MODEL: ${{ inputs.gemini_model }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         python "${{ github.action_path }}/scripts/ai_code_review.py"
 
@@ -56,7 +65,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       run: |
         if [ -z "$PR_NUMBER" ]; then
           echo "::warning::PR_NUMBER não identificado. O comentário não pôde ser publicado."
