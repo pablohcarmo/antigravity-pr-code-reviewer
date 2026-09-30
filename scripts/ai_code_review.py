@@ -342,7 +342,13 @@ async def run_review():
                 final_review = candidate_text
                 break
         except Exception as e:
-            wait_time = base_delay * (2 ** attempt)
+            error_str = str(e)
+            retry_match = re.search(r"retryDelay:\s*(\d+)s", error_str) or re.search(r"retry in\s+([\d\.]+)s", error_str, re.IGNORECASE)
+            if retry_match:
+                wait_time = min(int(float(retry_match.group(1))) + 2, 60)
+            else:
+                wait_time = base_delay * (2 ** attempt)
+
             if attempt < max_attempts - 1:
                 print(f"Tentativa {attempt + 1} falhou ({e}). Tentando novamente em {wait_time}s...", file=sys.stderr)
                 await asyncio.sleep(wait_time)

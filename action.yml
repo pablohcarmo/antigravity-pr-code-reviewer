@@ -18,9 +18,9 @@ inputs:
     required: false
     default: 'AGENTS.md'
   gemini_model:
-    description: 'Modelo específico do Gemini (ex: gemini-2.5-flash, gemini-1.5-pro). Usa o padrão do SDK quando omitido.'
+    description: 'Modelo específico do Gemini (ex: gemini-2.5-flash, gemini-1.5-pro).'
     required: false
-    default: ''
+    default: 'gemini-2.5-flash'
 
 runs:
   using: 'composite'
