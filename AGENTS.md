@@ -102,9 +102,11 @@ O agente deve considerar:
 14. **Formato de Saída (Modelo GitHub Copilot - Avaliação em Threads):**
 Para garantir máxima legibilidade e clareza visual, o agente deve estruturar a revisão no modelo de threads do GitHub Copilot:
 - **Resumo Executivo no Topo:** Indicar o veredito geral (`Changes recommended` se houver problemas críticos/altos ou `Changes approved`) com um resumo executivo de 2 a 3 frases destacando os pontos principais e a lista dos arquivos analisados.
-- **Comentários em Threads Separadas:** Cada problema identificado deve ser avaliado em um comentário/bloco independente (separado por divisor `---`), contendo:
-  - Cabeçalho com o arquivo e intervalo de linhas: `### caminho/do/arquivo.ext (Linhas +X a +Y)`
-  - Nível de severidade: `[High]`, `[Medium]` ou `[Low]`
-  - Trecho do código afetado
-  - Diagnóstico objetivo (explicando por que o código atual falhará ou é problemático e qual o impacto)
-  - Sugestão prática com o código corrigido
+- **Comentários em Threads Separadas (Uma thread por problema):** Cada apontamento deve ser avaliado em um comentário/bloco individual e atômico (separado por divisor `---`).
+  - **PROIBIDO agrupar múltiplos problemas em um único bloco:** Se um mesmo arquivo possuir 3 problemas diferentes, devem ser gerados 3 blocos de thread separados por `---`, cada um isolando o problema e suas linhas específicas.
+  - Cada thread deve conter obrigatoriamente:
+    - Cabeçalho com o arquivo e o intervalo exato de linhas: `### caminho/do/arquivo.ext (Linhas +X a +Y)`
+    - Nível de severidade em destaque: `**Severidade:** [High]` (ou `[Medium]`, `[Low]`)
+    - Trecho conciso do código afetado
+    - Diagnóstico objetivo (explicando por que o código atual falhará ou é problemático e qual o impacto real)
+    - Sugestão prática com o trecho de código corrigido

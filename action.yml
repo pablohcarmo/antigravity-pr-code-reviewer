@@ -53,7 +53,7 @@ runs:
         AGENTS_FILE: ${{ inputs.agents_file }}
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         python "${{ github.action_path }}/scripts/ai_code_review.py"
@@ -64,7 +64,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       run: |
         if [ -z "$PR_NUMBER" ]; then
           echo "::warning::PR_NUMBER não identificado. O comentário não pôde ser publicado."
