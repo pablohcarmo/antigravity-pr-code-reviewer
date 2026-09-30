@@ -54,6 +54,7 @@ runs:
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         python "${{ github.action_path }}/scripts/ai_code_review.py"
