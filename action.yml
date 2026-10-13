@@ -85,6 +85,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       run: |
         if [ -z "$PR_NUMBER" ]; then
@@ -93,7 +94,7 @@ runs:
         fi
 
         if [ -s review_output.md ]; then
-          gh pr comment "$PR_NUMBER" --body-file review_output.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file review_output.md
         else
-          echo "Nenhum arquivo review_output.md gerado ou arquivo vazio."
+          echo "Revisão já publicada com sucesso via GitHub Review API (ou arquivo sem novas pendências)."
         fi

@@ -107,10 +107,14 @@ def get_pr_discussions() -> str:
     def add_comment(author: str, body: str, location: str = ""):
         nonlocal total_chars
         clean_body = body.strip().replace("\r\n", "\n")
-        # Mitigação de Prompt Injection indireto (OWASP LLM01): sanitiza delimitadores de contexto
-        clean_body = clean_body.replace("</pr_discussions_context>", "[fechamento_contexto_filtrado]")
-        clean_body = clean_body.replace("<pr_discussions_context>", "[abertura_contexto_filtrada]")
-        if not clean_body or len(clean_body) > 3000:
+        # Mitigação robusta contra Indirect Prompt Injection (OWASP LLM01)
+        clean_body = re.sub(
+            r'<\s*/?\s*pr_discussions_context\s*>',
+            '[delimitador_contexto_filtrado]',
+            clean_body,
+            flags=re.IGNORECASE
+        )
+        if not clean_body:
             return
         trimmed_body = clean_body[:MAX_COMMENT_CHARS] + ("..." if len(clean_body) > MAX_COMMENT_CHARS else "")
         entry = f"- [@{author}{location}]: {trimmed_body}"
@@ -126,7 +130,11 @@ def get_pr_discussions() -> str:
             review_comments = json.loads(resp.read().decode("utf-8"))
             if isinstance(review_comments, list):
                 for c in review_comments[-15:]:
-                    author = c.get("user", {}).get("login", "autor")
+                    user_data = c.get("user") or {}
+                    author = user_data.get("login", "autor")
+                    is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
+                    if is_bot:
+                        continue
                     path = c.get("path", "")
                     line = c.get("line") or c.get("original_line") or ""
                     loc = f" em `{path}:{line}`" if path else ""
@@ -142,7 +150,7 @@ def get_pr_discussions() -> str:
             issue_comments = json.loads(resp.read().decode("utf-8"))
             if isinstance(issue_comments, list):
                 for c in issue_comments[-10:]:
-                    user_data = c.get("user", {})
+                    user_data = c.get("user") or {}
                     author = user_data.get("login", "autor")
                     is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
                     if not is_bot:
@@ -165,11 +173,34 @@ def get_pr_discussions() -> str:
         + "e não repita apontamentos dogmáticos já esclarecidos, adaptando sua recomendação de forma pragmática."
     )
 
-def parse_review_threads(markdown_text: str) -> tuple[str, list[dict]]:
-    """Extrai o resumo executivo e comentários inline separados por divisores '---'."""
-    parts = re.split(r'\n---+\n', markdown_text)
+def extract_valid_diff_lines(diff_text: str) -> dict[str, set[int]]:
+    """Mapeia cada arquivo modificado para as linhas existentes nos seus hunks (lado RIGHT)."""
+    valid_lines: dict[str, set[int]] = {}
+    current_file = None
+
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            current_file = line[6:].strip().replace("\\", "/")
+            if current_file not in valid_lines:
+                valid_lines[current_file] = set()
+        elif line.startswith("@@ ") and current_file:
+            # Captura @@ -old_start,old_count +new_start,new_count @@
+            m = re.search(r'\+(\d+)(?:,(\d+))?', line)
+            if m:
+                start = int(m.group(1))
+                count = int(m.group(2)) if m.group(2) is not None else 1
+                for l in range(start, start + count):
+                    valid_lines[current_file].add(l)
+
+    return valid_lines
+
+def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int]] | None = None) -> tuple[str, list[dict]]:
+    """Extrai o resumo executivo e comentários inline separados por divisores '---' fora de blocos de código."""
+    # Divide nos separadores '---' que antecedem cabeçalhos de thread (###), evitando quebrar código YAML/Markdown
+    parts = re.split(r'\n---+\n(?=\s*###\s+)', markdown_text)
     summary = parts[0].strip()
     comments = []
+    unresolved_parts = []
 
     for part in parts[1:]:
         part = part.strip()
@@ -196,6 +227,14 @@ def parse_review_threads(markdown_text: str) -> tuple[str, list[dict]]:
             end_line = int(m_lines.group(2)) if m_lines.group(2) else start_line
 
         if path and end_line:
+            file_lines = valid_diff_lines.get(path, set()) if valid_diff_lines else None
+
+            # Se houver validação de linhas do diff, assegura que a linha final existe no hunk
+            if file_lines is not None and end_line not in file_lines:
+                # Linha fora do hunk: anexa ao corpo geral da revisão para não disparar HTTP 422 na API
+                unresolved_parts.append(part)
+                continue
+
             comment_obj = {
                 "path": path,
                 "body": part,
@@ -203,18 +242,26 @@ def parse_review_threads(markdown_text: str) -> tuple[str, list[dict]]:
                 "side": "RIGHT"
             }
             if start_line and start_line < end_line:
-                comment_obj["start_line"] = start_line
-                comment_obj["start_side"] = "RIGHT"
+                # Só inclui start_line se estiver dentro do mesmo conjunto de linhas válidas
+                if file_lines is None or start_line in file_lines:
+                    comment_obj["start_line"] = start_line
+                    comment_obj["start_side"] = "RIGHT"
             comments.append(comment_obj)
+        else:
+            unresolved_parts.append(part)
+
+    if unresolved_parts:
+        summary += "\n\n---\n\n### Apontamentos Gerais / Contexto Fora do Diff\n\n" + "\n\n---\n\n".join(unresolved_parts)
 
     return summary, comments
 
-def publish_pr_review(repo: str, pr_number: str, token: str, head_sha: str, final_review: str) -> bool:
+def publish_pr_review(repo: str, pr_number: str, token: str, head_sha: str, final_review: str, diff_text: str = "") -> bool:
     """Publica a revisão via GitHub Pull Request Reviews API para criar threads interativas nativas no diff."""
     if not (repo and pr_number and token):
         return False
 
-    summary, inline_comments = parse_review_threads(final_review)
+    valid_lines = extract_valid_diff_lines(diff_text) if diff_text else None
+    summary, inline_comments = parse_review_threads(final_review, valid_lines)
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -383,7 +430,7 @@ async def run_review():
     head_sha = os.getenv("PR_HEAD_SHA", "")
 
     if repo and pr_number and token:
-        published = publish_pr_review(repo, pr_number, token, head_sha, final_review)
+        published = publish_pr_review(repo, pr_number, token, head_sha, final_review, diff_output)
         if published:
             # Esvazia o arquivo review_output.md para que a etapa subsequente 'gh pr comment' não duplique a postagem
             output_path.write_text("", encoding="utf-8")
