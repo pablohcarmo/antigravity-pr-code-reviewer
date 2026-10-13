@@ -172,25 +172,30 @@ jobs:
 | `gemini_api_key` | String | Sim | — | Chave de API do Google Gemini obtida no Google AI Studio. |
 | `github_token` | String | Não | `${{ github.token }}` | Token do GitHub com permissão de escrita em PRs (`pull-requests: write`). |
 | `agents_file` | String | Não | `AGENTS.md` | Caminho do arquivo contendo as diretrizes customizadas no repositório cliente. |
-| `gemini_model` | String | Não | `gemini-2.5-flash` | Identificador do modelo Gemini específico a ser utilizado (ex: `gemini-2.5-flash`, `gemini-1.5-pro`). |
+| `gemini_model` | String | Não | `gemini-3.8-flash` | Identificador do modelo Gemini específico a ser utilizado (ex: `gemini-3.8-flash`, `gemini-1.5-pro`). |
+| `thinking_level` | String | Não | `low` | Nível de raciocínio para modelos com reasoning (`minimal`, `low`, `medium`, `high`, `none`). O padrão `low` otimiza latência e consumo de tokens mantendo alta precisão. |
 
 ### Seleção e Disponibilidade de Modelos
 
-Por padrão, a Action utiliza o modelo `gemini-2.5-flash`, garantindo consumo econômico de tokens, processamento ágil no pipeline e varredura precisa para segurança, arquitetura e manutenibilidade sem exigir qualquer configuração adicional.
+Por padrão, a Action utiliza o modelo oficial `gemini-3.8-flash` configurado com `thinking_level: 'low'`. Essa combinação garante:
+- **Compatibilidade total com o Google AI Studio:** Evita erros `404 - Not Found` de modelos legados (como `gemini-2.5-flash`, descontinuado para novas chaves).
+- **Consumo reduzido de tokens:** A geração de tokens de raciocínio é contida no nível `low`, gerando economia drástica de cota sem comprometer a acurácia na identificação de falhas de segurança e qualidade.
+- **Cache automático de dependências Pip:** A Action utiliza internamente `actions/cache@v4` para reter os pacotes e wheels Python (como o SDK do Antigravity), acelerando a inicialização do runner de ~15s para ~1-2s.
 
-Caso deseje direcionar para uma versão específica, defina o parâmetro `gemini_model`:
+Caso deseje direcionar para uma versão específica ou alterar o raciocínio, configure os parâmetros:
 
 ```yaml
       - name: Executar Code Review com Antigravity
         uses: pablohcarmo/antigravity-pr-code-reviewer@v1
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          gemini_model: 'gemini-1.5-pro'
+          gemini_model: 'gemini-3.8-flash'
+          thinking_level: 'low'
 ```
 
 Diretrizes de seleção:
 
-- **Modelos Flash (ex: `gemini-2.5-flash`, `gemini-1.5-flash`):** Ideais para alta cadência de Pull Requests, menor tempo de espera no pipeline e consumo eficiente de tokens.
+- **Modelos Flash (ex: `gemini-3.8-flash`):** Recomendados para CI/CD contínuo, baixo consumo de cota e alta velocidade de resposta.
 - **Modelos Pro (ex: `gemini-1.5-pro`):** Recomendados para análises mais profundas que demandem maior capacidade analítica em bases de código complexas ou revisões críticas.
 - **Disponibilidade e Quotas:** A disponibilidade depende exclusivamente dos modelos ativos na sua conta e chave do [Google AI Studio](https://aistudio.google.com/). Caso seja informado um modelo inexistente ou sem permissão de acesso, a API retornará falha (`404 / 400`). Para a maioria dos casos, recomenda-se manter o valor padrão.
 

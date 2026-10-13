@@ -8,6 +8,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 from google.antigravity import Agent, LocalAgentConfig
+from google.antigravity.models import ModelTarget, GeminiAPIEndpoint, GeminiModelOptions, ThinkingLevel
 
 DIFF_CHAR_LIMIT = 30000
 MAX_COMMENT_CHARS = 1000
@@ -309,8 +310,25 @@ async def run_review():
         "api_key": api_key,
     }
     
-    gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-    config_params["model"] = gemini_model
+    gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-3.8-flash").strip()
+    thinking_level_str = (os.getenv("THINKING_LEVEL") or "low").strip().lower()
+
+    if thinking_level_str in ("", "none", "off", "disabled"):
+        config_params["model"] = gemini_model
+    else:
+        try:
+            thinking_level_enum = ThinkingLevel(thinking_level_str)
+        except (ValueError, KeyError):
+            thinking_level_enum = ThinkingLevel.LOW
+
+        target = ModelTarget(
+            name=gemini_model,
+            endpoint=GeminiAPIEndpoint(
+                api_key=api_key,
+                options=GeminiModelOptions(thinking_level=thinking_level_enum)
+            )
+        )
+        config_params["models"] = [target]
 
     config = LocalAgentConfig(**config_params)
     pr_discussions = get_pr_discussions()

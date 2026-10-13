@@ -18,9 +18,13 @@ inputs:
     required: false
     default: 'AGENTS.md'
   gemini_model:
-    description: 'Modelo específico do Gemini (ex: gemini-2.5-flash, gemini-1.5-pro).'
+    description: 'Modelo específico do Gemini (ex: gemini-3.8-flash, gemini-1.5-pro).'
     required: false
-    default: 'gemini-2.5-flash'
+    default: 'gemini-3.8-flash'
+  thinking_level:
+    description: 'Nível de raciocínio do modelo (minimal, low, medium, high, none). Padrão "low" garante menor consumo de tokens e resposta rápida.'
+    required: false
+    default: 'low'
 
 runs:
   using: 'composite'
@@ -30,10 +34,25 @@ runs:
       with:
         python-version: '3.11'
 
+    - name: Identificar diretório e hash do Pip
+      id: pip-info
+      shell: bash
+      run: |
+        REQ_FILE="${{ github.action_path }}/requirements.txt"
+        echo "dir=$(pip cache dir)" >> "$GITHUB_OUTPUT"
+        echo "hash=$(sha256sum "$REQ_FILE" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache de dependências Pip
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.pip-info.outputs.dir }}
+        key: ${{ runner.os }}-pip-${{ steps.pip-info.outputs.hash }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
     - name: Instalar dependências
       shell: bash
       run: |
-        python -m pip install --upgrade pip
         pip install -r "${{ github.action_path }}/requirements.txt"
 
     - name: Sincronizar branch base
@@ -52,6 +71,7 @@ runs:
         GITHUB_BASE_REF: ${{ github.base_ref }}
         AGENTS_FILE: ${{ inputs.agents_file }}
         GEMINI_MODEL: ${{ inputs.gemini_model }}
+        THINKING_LEVEL: ${{ inputs.thinking_level }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
