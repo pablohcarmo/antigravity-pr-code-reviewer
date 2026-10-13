@@ -177,10 +177,9 @@ jobs:
 
 ### Seleção e Disponibilidade de Modelos
 
-Por padrão, a Action utiliza o modelo oficial `gemini-3.8-flash` configurado com `thinking_level: 'low'`. Essa combinação garante:
-- **Compatibilidade total com o Google AI Studio:** Evita erros `404 - Not Found` de modelos legados (como `gemini-2.5-flash`, descontinuado para novas chaves).
-- **Consumo reduzido de tokens:** A geração de tokens de raciocínio é contida no nível `low`, gerando economia drástica de cota sem comprometer a acurácia na identificação de falhas de segurança e qualidade.
-- **Cache automático de dependências Pip:** A Action utiliza internamente `actions/cache@v4` para reter os pacotes e wheels Python (como o SDK do Antigravity), acelerando a inicialização do runner de ~15s para ~1-2s.
+Por padrão, a Action configura `gemini-3.8-flash` com `thinking_level: 'low'`. A disponibilidade do modelo depende do projeto associado à chave de API.
+- **Raciocínio:** O nível `low` limita o esforço de raciocínio. Reduzir tokens não aumenta a cota de requisições diárias por projeto/modelo.
+- **Cache automático de dependências Pip:** A Action utiliza `actions/cache@v5` para reter downloads e wheels Python. O hash de `requirements.txt` é calculado diretamente para evitar o erro de globbing com caminhos de Composite Actions contendo `/./`.
 
 Caso deseje direcionar para uma versão específica ou alterar o raciocínio, configure os parâmetros:
 
@@ -261,6 +260,10 @@ Após a execução do workflow, o relatório é publicado diretamente na discuss
 
 ## Diagnóstico e Solução de Problemas
 
+A geração faz no máximo três tentativas para falhas transitórias identificadas (HTTP 429, 500, 502, 503 e 504, timeout ou falha de conexão). O intervalo indicado pelo provedor é respeitado, com orçamento de até 60 segundos por espera. Cota diária esgotada, espera maior que esse orçamento e erros não transitórios encerram o job com falha e diagnóstico; não são convertidos em aprovação ou revisão bem-sucedida.
+
+Um HTTP 503 indica indisponibilidade transitória do provedor. Um HTTP 429 com `GenerateRequestsPerDayPerProjectPerModel` indica limite diário: verifique a cota do projeto/modelo e reexecute somente após restabelecer a disponibilidade. Repetir chamadas após 60 segundos não resolve uma espera indicada em horas.
+
 | Sintoma | Causa Provável | Ação Corretiva |
 | :--- | :--- | :--- |
 | `GEMINI_API_KEY não configurada. Review ignorado.` | Secret ausente ou inacessível no escopo do workflow. | Cadastre o secret `GEMINI_API_KEY` nas configurações de Actions do repositório ou da organização. |
@@ -268,6 +271,20 @@ Após a execução do workflow, o relatório é publicado diretamente na discuss
 | `Nenhuma alteração de código encontrada para revisar.` | O checkout foi realizado de forma rasa (shallow clone), impedindo o cálculo do diff contra a base. | Certifique-se de que a etapa `actions/checkout` inclua o parâmetro `fetch-depth: 0`. |
 
 ---
+
+## Validação local
+
+Com Python 3.11 ou superior e as dependências instaladas:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip check
+python -m compileall -q scripts tests
+python -m unittest discover -s tests -v
+git diff --check
+```
+
+Os testes exercitam as funções de produção com respostas de GitHub e Gemini simuladas, sem consumir cota, publicar comentários ou gerar `review_output.md`. O job `tests` do workflow executa essas verificações Python antes da revisão por IA, sem precisar de secrets. Não há linter ou formatter configurado no projeto.
 
 ## Licença
 

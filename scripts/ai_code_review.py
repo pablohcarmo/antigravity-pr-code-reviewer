@@ -2,17 +2,66 @@ import os
 import re
 import sys
 import json
+import math
 import asyncio
 import subprocess
 import urllib.request
 import urllib.error
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.models import ModelTarget, GeminiAPIEndpoint, GeminiModelOptions, ThinkingLevel
 
 DIFF_CHAR_LIMIT = 30000
 MAX_COMMENT_CHARS = 1000
 MAX_TOTAL_DISCUSSION_CHARS = 8000
+MAX_RETRY_DELAY = 60
+
+
+def get_retry_delay(error: Exception, attempt: int) -> float | None:
+    """Retorna espera para falhas transitórias; None indica falha sem retry útil."""
+    message = str(error)
+    status = re.search(r'(?:Error|HTTP|code)\s*[:=]?\s*(\d{3})\b', message, re.IGNORECASE)
+    code = int(status.group(1)) if status else None
+    if re.search(r'perday|per_day|requestsperday', message, re.IGNORECASE):
+        return None
+    if code is not None and code not in (429, 500, 502, 503, 504):
+        return None
+    if code is None and not isinstance(error, (TimeoutError, ConnectionError)):
+        return None
+    match = re.search(r'retryDelay["\s]*:\s*"?([\d.]+)s', message, re.IGNORECASE)
+    if match:
+        delay = float(match.group(1))
+    else:
+        match = re.search(
+            r'retry in\s+(?:(\d+)h)?(?:(\d+)m)?([\d.]+)s', message, re.IGNORECASE
+        )
+        delay = (int(match.group(1) or 0) * 3600 + int(match.group(2) or 0) * 60
+                 + float(match.group(3))) if match else 3 * (2 ** attempt)
+    # Nunca encurta a espera solicitada pelo provedor para caber no job.
+    if not math.isfinite(delay) or delay > MAX_RETRY_DELAY:
+        return None
+    return min(math.ceil(delay) + 2, MAX_RETRY_DELAY)
+
+
+def get_recent_issue_comments(url: str, headers: dict) -> list[dict]:
+    """Lê o final da paginação ascendente sem percorrer todo o histórico da issue."""
+    def read_page(page: int):
+        req = urllib.request.Request(f"{url}?per_page=100&page={page}", headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data if isinstance(data, list) else [], resp.headers.get("Link", "")
+
+    comments, links = read_page(1)
+    last = re.search(r'<([^>]+)>;\s*rel="last"', links)
+    if last:
+        # Reutiliza apenas o número da página, nunca envia o token a um URL recebido.
+        page = int(parse_qs(urlsplit(last.group(1)).query)["page"][0])
+        comments, _ = read_page(page)
+        if len(comments) < 10 and page > 1:
+            previous, _ = read_page(page - 1)
+            comments = previous + comments
+    return comments[-10:]
 
 def run_git_command(args: list[str], quiet: bool = False) -> str:
     """Executa comando git de forma segura com encoding resiliente. Lança exceção em caso de falha."""
@@ -134,7 +183,7 @@ def get_pr_discussions() -> str:
             if isinstance(review_comments, list):
                 for c in reversed(review_comments):
                     user_data = c.get("user") or {}
-                    author = user_data.get("login", "autor")
+                    author = user_data.get("login") or "autor"
                     is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
                     if is_bot:
                         continue
@@ -145,19 +194,15 @@ def get_pr_discussions() -> str:
     except Exception as e:
         print(f"Aviso: não foi possível carregar comentários de review do PR ({e})", file=sys.stderr)
 
-    # 2. Comentários gerais na timeline do PR (mais recentes primeiro)
+    # 2. Últimos comentários gerais, preservando a ordem cronológica
     try:
-        url_issue = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments?sort=created&direction=desc&per_page=10"
-        req_issue = urllib.request.Request(url_issue, headers=headers)
-        with urllib.request.urlopen(req_issue, timeout=10) as resp:
-            issue_comments = json.loads(resp.read().decode("utf-8"))
-            if isinstance(issue_comments, list):
-                for c in reversed(issue_comments):
-                    user_data = c.get("user") or {}
-                    author = user_data.get("login", "autor")
-                    is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
-                    if not is_bot:
-                        add_comment(author, c.get("body"), " na discussão geral")
+        url_issue = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+        for c in get_recent_issue_comments(url_issue, headers):
+            user_data = c.get("user") or {}
+            author = user_data.get("login") or "autor"
+            is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
+            if not is_bot:
+                add_comment(author, c.get("body"), " na discussão geral")
     except Exception as e:
         print(f"Aviso: não foi possível carregar comentários da issue ({e})", file=sys.stderr)
 
@@ -205,7 +250,27 @@ def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int
     """Extrai o resumo executivo e comentários inline separados por divisores '---' fora de blocos de código."""
     normalized_markdown = markdown_text.replace("\r\n", "\n")
     # Divide nos separadores '---' que antecedem cabeçalhos de thread (###), tolerando espaços residuais
-    parts = re.split(r'\n---+\s*\n(?=\s*###\s+)', normalized_markdown)
+    parts = []
+    lines = normalized_markdown.splitlines(keepends=True)
+    start = 0
+    fence = None
+    for index, line in enumerate(lines):
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line.rstrip('\n'))
+        if marker:
+            run, suffix = marker.groups()
+            if fence is None:
+                fence = run
+            elif run[0] == fence[0] and len(run) >= len(fence) and not suffix.strip():
+                fence = None
+            continue
+        if fence is None and re.fullmatch(r'---+[ \t]*\n?', line):
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            if next_index < len(lines) and re.match(r'###\s+', lines[next_index]):
+                parts.append(''.join(lines[start:index]))
+                start = index + 1
+    parts.append(''.join(lines[start:]))
     summary = parts[0].strip()
     comments = []
     unresolved_parts = []
@@ -227,7 +292,7 @@ def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int
         path = path.replace("\\", "/").strip("`' ")
 
         # Identifica números de linha (+X ou +X a +Y ou +X-Y)
-        m_lines = re.search(r'Linhas?\s+\+?(\d+)(?:\s*(?:a|-)\s*\+?(\d+))?', first_line, re.IGNORECASE)
+        m_lines = re.search(r'Linhas?\s+\+?(\d+)(?:\s*(?:a|[-–—])\s*\+?(\d+))?', first_line, re.IGNORECASE)
         start_line = None
         end_line = None
         if m_lines:
@@ -235,7 +300,7 @@ def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int
             end_line = int(m_lines.group(2)) if m_lines.group(2) else start_line
 
         if path and end_line:
-            file_lines = valid_diff_lines.get(path, set()) if valid_diff_lines else None
+            file_lines = valid_diff_lines.get(path, set()) if valid_diff_lines is not None else None
 
             # Se houver validação de linhas do diff, assegura que a linha final existe no hunk
             if file_lines is not None and end_line not in file_lines:
@@ -295,7 +360,8 @@ def publish_pr_review(repo: str, pr_number: str, token: str, head_sha: str, fina
                     print(f"Revisão com {len(inline_comments)} threads inline publicada com sucesso via GitHub Review API.")
                     return True
         except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8", errors="ignore")
+            with e:
+                error_body = e.read().decode("utf-8", errors="ignore")
             print(f"Aviso: Publicação com comentários inline retornou HTTP {e.code} ({error_body}). Tentando fallback...", file=sys.stderr)
         except Exception as e:
             print(f"Aviso: Erro ao submeter review com comentários inline ({e}). Tentando fallback...", file=sys.stderr)
@@ -366,7 +432,7 @@ async def run_review():
         "api_key": api_key,
     }
     
-    gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-3.8-flash").strip()
+    gemini_model = (os.getenv("GEMINI_MODEL") or "").strip() or "gemini-3.8-flash"
     thinking_level_str = (os.getenv("THINKING_LEVEL") or "low").strip().lower()
 
     # Modelos legados (como gemini-1.5-*) não suportam thinking options
@@ -395,7 +461,6 @@ async def run_review():
 
     final_review = ""
     max_attempts = 3
-    base_delay = 3
 
     for attempt in range(max_attempts):
         try:
@@ -418,19 +483,20 @@ async def run_review():
                 final_review = candidate_text
                 break
         except Exception as e:
-            error_str = str(e)
-            retry_match = re.search(r"retryDelay:\s*(\d+)s", error_str) or re.search(r"retry in\s+([\d\.]+)s", error_str, re.IGNORECASE)
-            if retry_match:
-                wait_time = min(int(float(retry_match.group(1))) + 2, 60)
-            else:
-                wait_time = base_delay * (2 ** attempt)
+            wait_time = get_retry_delay(e, attempt)
+            if wait_time is None:
+                raise RuntimeError(
+                    "Revisão não concluída: erro não transitório ou espera acima de 60s. "
+                    "Verifique a configuração e a cota do projeto/modelo no Gemini; "
+                    "reexecute após normalizar a disponibilidade."
+                ) from e
 
             if attempt < max_attempts - 1:
                 print(f"Tentativa {attempt + 1} falhou ({e}). Tentando novamente em {wait_time}s...", file=sys.stderr)
                 await asyncio.sleep(wait_time)
             else:
                 print(f"Todas as {max_attempts} tentativas falharam: {e}", file=sys.stderr)
-                raise e
+                raise
 
     output_path = Path("review_output.md")
     output_path.write_text(final_review, encoding="utf-8")

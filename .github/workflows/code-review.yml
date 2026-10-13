@@ -13,7 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Instalar dependências
+        run: python -m pip install -r requirements.txt
+      - name: Verificar dependências e sintaxe
+        run: |
+          python -m pip check
+          python -m compileall -q scripts tests
+      - name: Executar testes sem chamadas externas
+        run: python -m unittest discover -s tests -v
+
   code-review:
+    needs: tests
     runs-on: ubuntu-latest
     if: github.actor != 'dependabot[bot]'
 
