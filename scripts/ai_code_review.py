@@ -85,6 +85,16 @@ def load_system_instructions() -> str:
         return f"{base_instructions}\n\nDiretrizes Operacionais Padrão:\n{guidelines}"
     return base_instructions
 
+def sanitize_pr_comment_body(body: str | None) -> str:
+    """Normaliza e sanitiza o corpo de um comentário do PR contra Indirect Prompt Injection (OWASP LLM01)."""
+    clean_body = (body or "").strip().replace("\r\n", "\n")
+    return re.sub(
+        r'<\s*/?\s*pr_discussions_context(?:\s+[^>]*)?>',
+        '[delimitador_contexto_filtrado]',
+        clean_body,
+        flags=re.IGNORECASE
+    )
+
 def get_pr_discussions() -> str:
     """Busca o histórico recente de comentários e respostas de desenvolvedores no PR via API do GitHub."""
     token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN")
@@ -104,16 +114,9 @@ def get_pr_discussions() -> str:
     discussions: list[str] = []
     total_chars = 0
 
-    def add_comment(author: str, body: str, location: str = ""):
+    def add_comment(author: str, body: str | None, location: str = ""):
         nonlocal total_chars
-        clean_body = body.strip().replace("\r\n", "\n")
-        # Mitigação robusta contra Indirect Prompt Injection (OWASP LLM01)
-        clean_body = re.sub(
-            r'<\s*/?\s*pr_discussions_context(?:\s+[^>]*)?>',
-            '[delimitador_contexto_filtrado]',
-            clean_body,
-            flags=re.IGNORECASE
-        )
+        clean_body = sanitize_pr_comment_body(body)
         if not clean_body:
             return
         trimmed_body = clean_body[:MAX_COMMENT_CHARS] + ("..." if len(clean_body) > MAX_COMMENT_CHARS else "")
@@ -122,14 +125,14 @@ def get_pr_discussions() -> str:
             discussions.append(entry)
             total_chars += len(entry)
 
-    # 1. Comentários de threads de review no código (/pulls/{pr}/comments)
+    # 1. Comentários de threads de review no código (mais recentes primeiro)
     try:
-        url_review = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/comments?per_page=100"
+        url_review = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/comments?sort=created&direction=desc&per_page=15"
         req_review = urllib.request.Request(url_review, headers=headers)
         with urllib.request.urlopen(req_review, timeout=10) as resp:
             review_comments = json.loads(resp.read().decode("utf-8"))
             if isinstance(review_comments, list):
-                for c in review_comments[-15:]:
+                for c in reversed(review_comments):
                     user_data = c.get("user") or {}
                     author = user_data.get("login", "autor")
                     is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
@@ -138,23 +141,23 @@ def get_pr_discussions() -> str:
                     path = c.get("path", "")
                     line = c.get("line") or c.get("original_line") or ""
                     loc = f" em `{path}:{line}`" if path else ""
-                    add_comment(author, c.get("body", ""), loc)
+                    add_comment(author, c.get("body"), loc)
     except Exception as e:
         print(f"Aviso: não foi possível carregar comentários de review do PR ({e})", file=sys.stderr)
 
-    # 2. Comentários gerais na timeline do PR (/issues/{pr}/comments)
+    # 2. Comentários gerais na timeline do PR (mais recentes primeiro)
     try:
-        url_issue = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments?per_page=100"
+        url_issue = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments?sort=created&direction=desc&per_page=10"
         req_issue = urllib.request.Request(url_issue, headers=headers)
         with urllib.request.urlopen(req_issue, timeout=10) as resp:
             issue_comments = json.loads(resp.read().decode("utf-8"))
             if isinstance(issue_comments, list):
-                for c in issue_comments[-10:]:
+                for c in reversed(issue_comments):
                     user_data = c.get("user") or {}
                     author = user_data.get("login", "autor")
                     is_bot = user_data.get("type") == "Bot" or author.endswith("[bot]")
                     if not is_bot:
-                        add_comment(author, c.get("body", ""), " na discussão geral")
+                        add_comment(author, c.get("body"), " na discussão geral")
     except Exception as e:
         print(f"Aviso: não foi possível carregar comentários da issue ({e})", file=sys.stderr)
 
@@ -201,8 +204,8 @@ def extract_valid_diff_lines(diff_text: str) -> dict[str, set[int]]:
 def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int]] | None = None) -> tuple[str, list[dict]]:
     """Extrai o resumo executivo e comentários inline separados por divisores '---' fora de blocos de código."""
     normalized_markdown = markdown_text.replace("\r\n", "\n")
-    # Divide nos separadores '---' que antecedem cabeçalhos de thread (###), evitando quebrar código YAML/Markdown
-    parts = re.split(r'\n---+\n(?=\s*###\s+)', normalized_markdown)
+    # Divide nos separadores '---' que antecedem cabeçalhos de thread (###), tolerando espaços residuais
+    parts = re.split(r'\n---+\s*\n(?=\s*###\s+)', normalized_markdown)
     summary = parts[0].strip()
     comments = []
     unresolved_parts = []
@@ -247,8 +250,9 @@ def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int
                 "side": "RIGHT"
             }
             if start_line and start_line < end_line:
-                # Só inclui start_line se estiver dentro do mesmo conjunto de linhas válidas
-                if file_lines is None or start_line in file_lines:
+                # Todas as linhas do intervalo devem pertencer ao mesmo hunk contínuo do diff
+                is_continuous_hunk = file_lines is None or all(l in file_lines for l in range(start_line, end_line + 1))
+                if is_continuous_hunk:
                     comment_obj["start_line"] = start_line
                     comment_obj["start_side"] = "RIGHT"
             comments.append(comment_obj)
@@ -365,7 +369,10 @@ async def run_review():
     gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-3.8-flash").strip()
     thinking_level_str = (os.getenv("THINKING_LEVEL") or "low").strip().lower()
 
-    if thinking_level_str in ("", "none", "off", "disabled"):
+    # Modelos legados (como gemini-1.5-*) não suportam thinking options
+    is_reasoning_model = any(tag in gemini_model for tag in ("gemini-2.", "gemini-3."))
+
+    if thinking_level_str in ("", "none", "off", "disabled") or not is_reasoning_model:
         config_params["model"] = gemini_model
     else:
         try:
