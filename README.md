@@ -172,11 +172,11 @@ jobs:
 | `gemini_api_key` | String | Sim | — | Chave de API do Google Gemini obtida no Google AI Studio. |
 | `github_token` | String | Não | `${{ github.token }}` | Token do GitHub com permissão de escrita em PRs (`pull-requests: write`). |
 | `agents_file` | String | Não | `AGENTS.md` | Caminho do arquivo contendo as diretrizes customizadas no repositório cliente. |
-| `gemini_model` | String | Não | *(padrão do SDK)* | Identificador do modelo Gemini específico a ser utilizado (ex: `gemini-2.5-flash`, `gemini-1.5-pro`). |
+| `gemini_model` | String | Não | `gemini-2.5-flash` | Identificador do modelo Gemini específico a ser utilizado (ex: `gemini-2.5-flash`, `gemini-1.5-pro`). |
 
 ### Seleção e Disponibilidade de Modelos
 
-Por padrão, a Action utiliza o modelo estável padrão configurado internamente no SDK `google-antigravity` (família Flash, como `gemini-2.5-flash`), garantindo processamento rápido e ampla cota gratuita sem exigir qualquer configuração adicional.
+Por padrão, a Action utiliza o modelo `gemini-2.5-flash`, garantindo consumo econômico de tokens, processamento ágil no pipeline e varredura precisa para segurança, arquitetura e manutenibilidade sem exigir qualquer configuração adicional.
 
 Caso deseje direcionar para uma versão específica, defina o parâmetro `gemini_model`:
 

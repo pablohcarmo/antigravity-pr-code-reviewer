@@ -309,9 +309,8 @@ async def run_review():
         "api_key": api_key,
     }
     
-    gemini_model = (os.getenv("GEMINI_MODEL") or "").strip()
-    if gemini_model:
-        config_params["model"] = gemini_model
+    gemini_model = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+    config_params["model"] = gemini_model
 
     config = LocalAgentConfig(**config_params)
     pr_discussions = get_pr_discussions()
