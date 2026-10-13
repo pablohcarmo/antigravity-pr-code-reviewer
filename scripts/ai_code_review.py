@@ -109,7 +109,7 @@ def get_pr_discussions() -> str:
         clean_body = body.strip().replace("\r\n", "\n")
         # Mitigação robusta contra Indirect Prompt Injection (OWASP LLM01)
         clean_body = re.sub(
-            r'<\s*/?\s*pr_discussions_context\s*>',
+            r'<\s*/?\s*pr_discussions_context(?:\s+[^>]*)?>',
             '[delimitador_contexto_filtrado]',
             clean_body,
             flags=re.IGNORECASE
@@ -179,10 +179,14 @@ def extract_valid_diff_lines(diff_text: str) -> dict[str, set[int]]:
     current_file = None
 
     for line in diff_text.splitlines():
-        if line.startswith("+++ b/"):
+        if line.startswith("diff --git "):
+            current_file = None
+        elif line.startswith("+++ b/"):
             current_file = line[6:].strip().replace("\\", "/")
             if current_file not in valid_lines:
                 valid_lines[current_file] = set()
+        elif line.startswith("+++ /dev/null"):
+            current_file = None
         elif line.startswith("@@ ") and current_file:
             # Captura @@ -old_start,old_count +new_start,new_count @@
             m = re.search(r'\+(\d+)(?:,(\d+))?', line)
@@ -196,8 +200,9 @@ def extract_valid_diff_lines(diff_text: str) -> dict[str, set[int]]:
 
 def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int]] | None = None) -> tuple[str, list[dict]]:
     """Extrai o resumo executivo e comentários inline separados por divisores '---' fora de blocos de código."""
+    normalized_markdown = markdown_text.replace("\r\n", "\n")
     # Divide nos separadores '---' que antecedem cabeçalhos de thread (###), evitando quebrar código YAML/Markdown
-    parts = re.split(r'\n---+\n(?=\s*###\s+)', markdown_text)
+    parts = re.split(r'\n---+\n(?=\s*###\s+)', normalized_markdown)
     summary = parts[0].strip()
     comments = []
     unresolved_parts = []
@@ -218,8 +223,8 @@ def parse_review_threads(markdown_text: str, valid_diff_lines: dict[str, set[int
         
         path = path.replace("\\", "/").strip("`' ")
 
-        # Identifica números de linha (+X ou +X a +Y)
-        m_lines = re.search(r'Linhas?\s+\+?(\d+)(?:\s+a\s+\+?(\d+))?', first_line, re.IGNORECASE)
+        # Identifica números de linha (+X ou +X a +Y ou +X-Y)
+        m_lines = re.search(r'Linhas?\s+\+?(\d+)(?:\s*(?:a|-)\s*\+?(\d+))?', first_line, re.IGNORECASE)
         start_line = None
         end_line = None
         if m_lines:
