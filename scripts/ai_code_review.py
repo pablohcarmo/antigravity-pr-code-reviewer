@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from google.antigravity import Agent, LocalAgentConfig
 from google.antigravity.models import ModelTarget, GeminiAPIEndpoint, GeminiModelOptions, ThinkingLevel
+from google.antigravity.types import ModelAPIRetryConfig, RetryConfig
 
 DIFF_CHAR_LIMIT = 30000
 MAX_COMMENT_CHARS = 1000
@@ -430,6 +431,8 @@ async def run_review():
     config_params = {
         "system_instructions": system_instructions,
         "api_key": api_key,
+        # O loop abaixo controla os retries; defaults do SDK multiplicam as tentativas.
+        "retry_config": RetryConfig(api_retry=ModelAPIRetryConfig(max_retries=0)),
     }
     
     gemini_model = (os.getenv("GEMINI_MODEL") or "").strip() or "gemini-3.8-flash"

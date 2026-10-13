@@ -348,6 +348,8 @@ class TestReviewExecution(unittest.IsolatedAsyncioTestCase):
                 await run_review()
             except RuntimeError as error:
                 return factory.call_count, sleep.await_count, write.call_count, error
+            config = factory.call_args.args[0]
+            self.assertEqual(config.retry_config.api_retry.max_retries, 0)
             return factory.call_count, sleep.await_count, write.call_count, None
 
     async def test_daily_quota_fails_without_sleep_or_output(self):

@@ -260,7 +260,7 @@ Após a execução do workflow, o relatório é publicado diretamente na discuss
 
 ## Diagnóstico e Solução de Problemas
 
-A geração faz no máximo três tentativas para falhas transitórias identificadas (HTTP 429, 500, 502, 503 e 504, timeout ou falha de conexão). O intervalo indicado pelo provedor é respeitado, com orçamento de até 60 segundos por espera. Cota diária esgotada, espera maior que esse orçamento e erros não transitórios encerram o job com falha e diagnóstico; não são convertidos em aprovação ou revisão bem-sucedida.
+A geração faz no máximo três tentativas no script para falhas transitórias identificadas (HTTP 429, 500, 502, 503 e 504, timeout ou falha de conexão). Os retries internos de API do SDK são desativados explicitamente para não multiplicar essas tentativas. O intervalo indicado pelo provedor é respeitado, com orçamento de até 60 segundos por espera. Cota diária esgotada, espera maior que esse orçamento e erros não transitórios encerram o job com falha e diagnóstico; não são convertidos em aprovação ou revisão bem-sucedida. O job de revisão deste repositório possui limite total de 10 minutos; workflows consumidores devem definir seu próprio `timeout-minutes`.
 
 Um HTTP 503 indica indisponibilidade transitória do provedor. Um HTTP 429 com `GenerateRequestsPerDayPerProjectPerModel` indica limite diário: verifique a cota do projeto/modelo e reexecute somente após restabelecer a disponibilidade. Repetir chamadas após 60 segundos não resolve uma espera indicada em horas.
 
