@@ -17,6 +17,14 @@ inputs:
     description: 'Caminho para arquivo customizado de diretrizes no repositório de destino'
     required: false
     default: 'AGENTS.md'
+  gemini_model:
+    description: 'Modelo específico do Gemini (ex: gemini-3.8-flash, gemini-1.5-pro).'
+    required: false
+    default: 'gemini-3.8-flash'
+  thinking_level:
+    description: 'Nível de raciocínio do modelo (minimal, low, medium, high, none). Padrão "low" garante menor consumo de tokens e resposta rápida.'
+    required: false
+    default: 'low'
 
 runs:
   using: 'composite'
@@ -26,10 +34,25 @@ runs:
       with:
         python-version: '3.11'
 
+    - name: Identificar diretório e hash do Pip
+      id: pip-info
+      shell: bash
+      run: |
+        REQ_FILE="${{ github.action_path }}/requirements.txt"
+        echo "dir=$(pip cache dir)" >> "$GITHUB_OUTPUT"
+        echo "hash=$(sha256sum "$REQ_FILE" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache de dependências Pip
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.pip-info.outputs.dir }}
+        key: ${{ runner.os }}-pip-${{ steps.pip-info.outputs.hash }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
     - name: Instalar dependências
       shell: bash
       run: |
-        python -m pip install --upgrade pip
         pip install -r "${{ github.action_path }}/requirements.txt"
 
     - name: Sincronizar branch base
@@ -47,6 +70,12 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_BASE_REF: ${{ github.base_ref }}
         AGENTS_FILE: ${{ inputs.agents_file }}
+        GEMINI_MODEL: ${{ inputs.gemini_model }}
+        THINKING_LEVEL: ${{ inputs.thinking_level }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
       run: |
         python "${{ github.action_path }}/scripts/ai_code_review.py"
 
@@ -56,7 +85,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github_token }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
       run: |
         if [ -z "$PR_NUMBER" ]; then
           echo "::warning::PR_NUMBER não identificado. O comentário não pôde ser publicado."
@@ -64,7 +94,7 @@ runs:
         fi
 
         if [ -s review_output.md ]; then
-          gh pr comment "$PR_NUMBER" --body-file review_output.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file review_output.md
         else
-          echo "Nenhum arquivo review_output.md gerado ou arquivo vazio."
+          echo "Revisão já publicada com sucesso via GitHub Review API (ou arquivo sem novas pendências)."
         fi
